@@ -1,6 +1,6 @@
 # GitHub Enterprise
 
-Use the bundled script for repo-backed skill operations. It supports shallow sparse checkout so only the requested skills directory, or selected skill folders, are pulled locally.
+Use the bundled script for repo-backed skill operations. `catalog-git` and `show-skill-git` do not clone the repository; they use `git archive --remote` to fetch only the requested directory or `SKILL.md`. Install and sync operations still use shallow sparse checkout so only the requested skills directory, or selected skill folders, are pulled locally.
 
 ## Supported Credentials
 
@@ -28,6 +28,16 @@ python skills/skills-manager/scripts/manage_skills.py catalog-git \
   --repo https://github.example.com/platform/skills.git \
   --repo-subdir skills \
   --ref main
+```
+
+Show one remote skill file without cloning:
+
+```bash
+python skills/skills-manager/scripts/manage_skills.py show-skill-git \
+  --repo https://github.example.com/platform/skills.git \
+  --repo-subdir skills \
+  --ref main \
+  --skill release-helper
 ```
 
 Install one remote skill into Codex:

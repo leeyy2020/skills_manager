@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +198,32 @@ def run(cmd: list[str], env: dict[str, str] | None = None, cwd: Path | None = No
     subprocess.run(cmd, check=True, env=env, cwd=cwd)
 
 
+def run_capture(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(cmd, check=True, env=env, cwd=cwd, stdout=subprocess.PIPE)
+
+
+def git_env(auth: AuthConfig) -> tuple[dict[str, str], Path | None]:
+    env = os.environ.copy()
+    if not auth.username or not auth.password:
+        return env, None
+    temp_dir = Path(tempfile.mkdtemp(prefix="skills-manager-auth-"))
+    askpass_script = make_askpass_script(temp_dir, auth)
+    env["GIT_ASKPASS"] = str(askpass_script)
+    env["SKILLS_GIT_USERNAME"] = auth.username or ""
+    env["SKILLS_GIT_PASSWORD"] = auth.password or ""
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env, temp_dir
+
+
+def cleanup_temp_dir(path: Path | None) -> None:
+    if path is not None:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def clone_sparse(
     repo: str,
     ref: str | None,
@@ -203,9 +232,10 @@ def clone_sparse(
 ) -> Path:
     temp_dir = Path(tempfile.mkdtemp(prefix="skills-manager-"))
     repo_dir = temp_dir / "repo"
-    env = os.environ.copy()
-    askpass_script = make_askpass_script(temp_dir, auth)
-    if askpass_script:
+    env, auth_temp_dir = git_env(auth)
+    if auth_temp_dir is not None:
+        cleanup_temp_dir(auth_temp_dir)
+        askpass_script = make_askpass_script(temp_dir, auth)
         env["GIT_ASKPASS"] = str(askpass_script)
         env["SKILLS_GIT_USERNAME"] = auth.username or ""
         env["SKILLS_GIT_PASSWORD"] = auth.password or ""
@@ -225,6 +255,82 @@ def clone_sparse(
 def list_repo_skills(repo_dir: Path, repo_subdir: str) -> list[Path]:
     base = repo_dir / repo_subdir
     return discover_skill_dirs(base)
+
+
+def parse_skill_frontmatter(skill_md: str) -> dict[str, str]:
+    match = re.match(r"^---\n(.*?)\n---", skill_md, re.DOTALL)
+    if not match:
+        return {}
+    fields = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip().strip('"').strip("'")
+    return fields
+
+
+def archive_fetch(repo: str, ref: str | None, pathspecs: list[str], auth: AuthConfig) -> bytes:
+    env, auth_temp_dir = git_env(auth)
+    try:
+        cmd = ["git", "archive", "--format=tar", f"--remote={repo}"]
+        archive_ref = ref or "HEAD"
+        cmd.append(archive_ref)
+        cmd.extend(pathspecs)
+        result = run_capture(cmd, env=env)
+        return result.stdout
+    finally:
+        cleanup_temp_dir(auth_temp_dir)
+
+
+def list_remote_skill_metadata(
+    repo: str,
+    ref: str | None,
+    repo_subdir: str,
+    auth: AuthConfig,
+) -> list[dict[str, str]]:
+    archive_bytes = archive_fetch(repo, ref, [repo_subdir], auth)
+    skills = []
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as tar:
+        for member in tar.getmembers():
+            if not member.isfile() or not member.name.endswith("/SKILL.md"):
+                continue
+            fileobj = tar.extractfile(member)
+            if fileobj is None:
+                continue
+            content = fileobj.read().decode("utf-8")
+            relative = Path(member.name)
+            skill_name = relative.parent.name
+            frontmatter = parse_skill_frontmatter(content)
+            skills.append(
+                {
+                    "name": skill_name,
+                    "path": member.name,
+                    "description": frontmatter.get("description", ""),
+                }
+            )
+    return sorted(skills, key=lambda item: item["name"])
+
+
+def fetch_remote_skill_md(
+    repo: str,
+    ref: str | None,
+    repo_subdir: str,
+    skill_name: str,
+    auth: AuthConfig,
+) -> str:
+    path = f"{repo_subdir}/{skill_name}/SKILL.md"
+    archive_bytes = archive_fetch(repo, ref, [path], auth)
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            if member.name == path or member.name.endswith("/SKILL.md"):
+                fileobj = tar.extractfile(member)
+                if fileobj is None:
+                    break
+                return fileobj.read().decode("utf-8")
+        raise FileNotFoundError(f"Unable to read remote skill file: {path}")
 
 
 def install_repo_skills(
@@ -339,30 +445,55 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 def cmd_catalog_git(args: argparse.Namespace) -> int:
     require_args(args, ["repo"])
-    repo_dir = clone_sparse(args.repo, args.ref, [args.repo_subdir], auth_from_args(args))
-    try:
-        skills = list_repo_skills(repo_dir, args.repo_subdir)
-        payload = {
-            "repo": args.repo,
-            "ref": args.ref,
-            "repo_subdir": args.repo_subdir,
-            "skills": [path.name for path in skills],
-        }
-        if args.json:
-            print_json(payload)
+    skills = list_remote_skill_metadata(args.repo, args.ref, args.repo_subdir, auth_from_args(args))
+    payload = {
+        "repo": args.repo,
+        "ref": args.ref,
+        "repo_subdir": args.repo_subdir,
+        "skills": skills if args.details else [item["name"] for item in skills],
+    }
+    if args.json:
+        print_json(payload)
+    else:
+        print(f"Repo: {args.repo}")
+        print(f"Subdir: {args.repo_subdir}")
+        if args.ref:
+            print(f"Ref: {args.ref}")
+        if payload["skills"]:
+            for skill in skills:
+                if args.details and skill["description"]:
+                    print(f"  - {skill['name']}: {skill['description']}")
+                else:
+                    print(f"  - {skill['name']}")
         else:
-            print(f"Repo: {args.repo}")
-            print(f"Subdir: {args.repo_subdir}")
-            if args.ref:
-                print(f"Ref: {args.ref}")
-            if payload["skills"]:
-                for skill in payload["skills"]:
-                    print(f"  - {skill}")
-            else:
-                print("  (no skills found)")
-        return 0
-    finally:
-        shutil.rmtree(repo_dir.parent, ignore_errors=True)
+            print("  (no skills found)")
+    return 0
+
+
+def cmd_show_skill_git(args: argparse.Namespace) -> int:
+    require_args(args, ["repo", "skill"])
+    content = fetch_remote_skill_md(
+        args.repo, args.ref, args.repo_subdir, args.skill, auth_from_args(args)
+    )
+    if args.json:
+        frontmatter = parse_skill_frontmatter(content)
+        print_json(
+            {
+                "repo": args.repo,
+                "ref": args.ref,
+                "repo_subdir": args.repo_subdir,
+                "skill": args.skill,
+                "frontmatter": frontmatter,
+                "content": content,
+            }
+        )
+    elif args.frontmatter_only:
+        frontmatter = parse_skill_frontmatter(content)
+        for key, value in frontmatter.items():
+            print(f"{key}: {value}")
+    else:
+        print(content, end="" if content.endswith("\n") else "\n")
+    return 0
 
 
 def cmd_install_git(args: argparse.Namespace) -> int:
@@ -420,9 +551,9 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--missing-ok", action="store_true")
     uninstall.set_defaults(func=cmd_uninstall)
 
-    for command in ("catalog-git", "install-git", "sync-git"):
+    for command in ("catalog-git", "show-skill-git", "install-git", "sync-git"):
         git_parser = subparsers.add_parser(command, help=f"{command} against a git repo")
-        if command != "catalog-git":
+        if command in ("install-git", "sync-git"):
             git_parser.add_argument("--app", choices=["codex", "opencode"])
             git_parser.add_argument("--codex-dir")
             git_parser.add_argument("--opencode-dir")
@@ -434,10 +565,17 @@ def build_parser() -> argparse.ArgumentParser:
         git_parser.add_argument("--password")
         git_parser.add_argument("--token")
         git_parser.add_argument("--json", action="store_true")
+        if command == "catalog-git":
+            git_parser.add_argument("--details", action="store_true")
+        if command == "show-skill-git":
+            git_parser.add_argument("--skill", required=True)
+            git_parser.add_argument("--frontmatter-only", action="store_true")
         if command == "install-git":
             git_parser.add_argument("--skill", action="append")
         if command == "catalog-git":
             git_parser.set_defaults(func=cmd_catalog_git)
+        elif command == "show-skill-git":
+            git_parser.set_defaults(func=cmd_show_skill_git)
         elif command == "install-git":
             git_parser.set_defaults(func=cmd_install_git)
         else:

@@ -11,7 +11,7 @@ Use this skill to manage skill folders for Codex and OpenCode from one place. Pr
 
 1. Resolve the target app and its skills directory.
 2. Inspect the current installed skills before modifying anything.
-3. Choose one operation: install from local path, uninstall, list remote repo catalog, or sync from GitHub Enterprise.
+3. Choose one operation: install from local path, uninstall, list remote repo catalog, inspect one remote `SKILL.md`, or sync from GitHub Enterprise.
 4. Run the top-level CLI `./skillsctl` when working from this repo, or run the bundled script directly when invoking it from elsewhere.
 5. Re-list the target directory after changes when confirmation matters.
 
@@ -83,7 +83,23 @@ Use `catalog-git` to inspect which skills are available under a repo subdirector
   --ref main
 ```
 
-The script performs a shallow sparse checkout into a temporary directory and lists skill folders that contain `SKILL.md`.
+Use `--details` to show descriptions from each remote `SKILL.md` frontmatter:
+
+```bash
+./skillsctl catalog-git --details
+```
+
+Use `show-skill-git` to fetch one remote `SKILL.md` without cloning:
+
+```bash
+./skillsctl show-skill-git \
+  --repo https://github.example.com/org/skills.git \
+  --repo-subdir skills \
+  --ref main \
+  --skill release-helper
+```
+
+`catalog-git` and `show-skill-git` use remote archive reads instead of clone. They fetch only the target directory or `SKILL.md`.
 
 ## GitHub Enterprise Install And Sync
 
