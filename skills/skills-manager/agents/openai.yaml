@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skills Manager"
+  short_description: "Manage Codex and OpenCode skills locally"
+  default_prompt: "Use $skills-manager to inspect, install, sync, or remove skills for Codex or OpenCode."

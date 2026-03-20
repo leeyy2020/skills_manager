@@ -1,0 +1,17 @@
+[git]
+repo = "https://github.example.com/platform/skills.git"
+repo_subdir = "skills"
+ref = "main"
+
+[paths]
+codex_dir = "~/.codex/skills"
+opencode_dir = "~/.config/opencode/skills"
+
+[defaults]
+app = "codex"
+
+[auth]
+# Prefer environment variables for secrets in real use.
+# username = "your-username"
+# password = "your-password"
+# token = "your-token"
