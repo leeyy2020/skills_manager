@@ -12,7 +12,7 @@ Use this skill to manage skill folders for Codex and OpenCode from one place. Pr
 1. Resolve the target app and its skills directory.
 2. Inspect the current installed skills before modifying anything.
 3. Choose one operation: install from local path, uninstall, list remote repo catalog, inspect one remote `SKILL.md`, or sync from GitHub Enterprise.
-4. Run the top-level CLI `./skillsctl` when working from this repo, or run the bundled script directly when invoking it from elsewhere.
+4. Run the bundled `./skillsctl` inside this skill folder, or run `scripts/manage_skills.py` directly.
 5. Re-list the target directory after changes when confirmation matters.
 
 ## Target Paths
@@ -27,6 +27,8 @@ Run:
 ```bash
 ./skillsctl list --app all
 ```
+
+If the skill is installed under another root, run the `skillsctl` file that lives inside the installed skill directory.
 
 ## Config File
 
@@ -44,6 +46,8 @@ Inspect the active config with:
 ```bash
 ./skillsctl show-config
 ```
+
+A portable example config is bundled at `skills-manager.toml.example` inside this skill folder.
 
 ## Local Install And Removal
 
@@ -129,7 +133,7 @@ Sync the whole repo skills directory into an app:
 
 ## Authentication
 
-For GitHub Enterprise, prefer environment variables so git authentication is automatic and non-interactive. Read [references/github-enterprise.md](references/github-enterprise.md) when auth details or examples are needed. A repo root config example is available at `skills-manager.toml.example`.
+For GitHub Enterprise, prefer environment variables so git authentication is automatic and non-interactive. Read [references/github-enterprise.md](references/github-enterprise.md) when auth details or examples are needed. A bundled config example is available at `skills-manager.toml.example`.
 
 Supported inputs, in precedence order:
 
@@ -151,5 +155,6 @@ If a token is supplied, the script feeds it through `GIT_ASKPASS` and uses `x-ac
 ## Bundled Resources
 
 - `scripts/manage_skills.py`: CLI for listing, installing, uninstalling, cataloging, and syncing skills
+- `skillsctl`: wrapper that invokes `scripts/manage_skills.py` from inside the skill folder
+- `skills-manager.toml.example`: portable config example for repeated repo operations
 - `references/github-enterprise.md`: auth inputs, environment variables, and command examples
-- repo root `skillsctl`: top-level launcher for the bundled CLI
